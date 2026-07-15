@@ -179,15 +179,13 @@ IDs** — 8.1× duplication.
 Writing through a `kubectl port-forward` is far slower than the in-cluster path
 the default timeout assumes. Writes timed out and the exporter did what a good
 exporter does: it retried. Retries are at-least-once, so every timed-out batch
-rewrote rows that had already landed.
+rewrote rows that had already landed. The fix was a 180s timeout and turning
+retry **off**, so a timeout becomes a visible gap instead of silent duplication.
 
-The fix was a 180s timeout and turning retry **off**, so a timeout becomes a
-visible gap instead of silent duplication.
-
-My own `verify` command had reported "all spans accounted for" on that
-eight-times-too-big data, because it compared row count to expected instead of
-distinct span IDs. My verification tool had the same bug as the thing it was
-verifying: it trusted a number without checking what it meant.
+My own `verify` command had called this "all spans accounted for", because it
+compared row count to expected instead of distinct span IDs. My verification
+tool had the same bug as the thing it was verifying: it trusted a number without
+checking what it meant.
 
 ## The payoff, and the bot
 
@@ -245,20 +243,16 @@ speed.](images/03-dashboard-outcomes.png)
 The obvious mitigation is a canary: emit a span a minute, alert when it stops. I
 built it. It can't work.
 
-I made a threshold rule — count of canary spans **below 1** over 5 minutes. With
-no canary running, the exact condition it exists to catch, it sat `inactive`.
-Forever. A control rule pointed at a service that *does* have data, with a
-threshold guaranteed to trip, fired immediately.
+My threshold rule — canary spans **below 1** over 5 minutes — sat `inactive`
+with no canary running, which is the exact condition it exists to catch. A
+control rule pointed at a service that *does* have data fired immediately, so
+the engine is fine. **"No data" isn't a low value; it's the absence of a
+series**, and there's nothing to threshold. If the canary died, its series would
+vanish and the alert would go quiet at the moment it should scream.
 
-The engine is fine. **"No data" isn't a low value — it's the absence of a
-series**, and there's nothing to compare against a threshold. If the canary were
-running and then died, its series would vanish and the alert would go quiet at
-exactly the moment it should scream.
-
-So the drop increments no metric, and the data's absence produces no series. The
-failure is undetectable from inside the system by construction. The real answer
-is the boring one every SRE knows and I had to rediscover: a dead man's switch
-has to live **outside** the system it watches.
+The drop increments no metric, and absent data produces no series. The failure
+is undetectable from inside the system by construction — a dead man's switch has
+to live **outside** the system it watches.
 
 ## What I'd tell my past self
 
@@ -282,8 +276,9 @@ nothing tells you: not the HTTP response, not the logs, not the metrics, not an
 alert. It's one hardcoded constant — one that was already made configurable for
 logs, six months ago, in twenty lines.
 
-Tools are here: [repo link], including the probe that finds the wall on any OTLP
-endpoint. Filed upstream as [issue link], pointing at #746 as the precedent.
+Tools are here:
+[Signoz-Git-PR-Review-Latency](https://github.com/KanurkarPrateek/Signoz-Git-PR-Review-Latency),
+including the probe that finds the wall on any OTLP endpoint.
 
 Verified on SigNoz v0.131.0 and signoz-otel-collector v0.144.5; the constant is
 unchanged on `main` and in v0.144.6. Your version may differ — run the probe and
