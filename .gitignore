@@ -1,0 +1,17 @@
+# Secrets — never commit
+.signoz-key
+.sztok
+*.pem
+
+# Fetched GitHub data (12MB). Run `backfill.py fetch` to regenerate.
+cache/
+
+# Generated artifacts
+blog-report.html
+fetch.log
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,65 @@
+# An OTLP canary.
+#
+# The failure this whole exercise uncovered -- the exporter silently discarding
+# spans -- increments no metric and logs only at Debug. There is no counter to
+# alert on. The pipeline reports perfect health while dropping your data.
+#
+# So don't alert on the pipeline. Alert on the data. Emit one span a minute and
+# page when it stops arriving; that catches the age wall, a dead collector, a
+# full disk, a broken port-forward, and every other silent drop at once --
+# without needing to know which one happened.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otlp-canary
+  namespace: signoz
+  labels: { app: otlp-canary }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: otlp-canary }
+  template:
+    metadata:
+      labels: { app: otlp-canary }
+    spec:
+      containers:
+        - name: canary
+          image: python:3.11-slim
+          env:
+            - name: OTLP_ENDPOINT
+              value: "http://signoz-otel-collector.signoz.svc.cluster.local:4318/v1/traces"
+            - name: PERIOD_SECONDS
+              value: "60"
+          command: ["python3", "-c"]
+          args:
+            - |
+              import json, os, secrets, time, urllib.request
+              ep = os.environ["OTLP_ENDPOINT"]
+              period = int(os.environ["PERIOD_SECONDS"])
+              while True:
+                  now = int(time.time() * 1e9)
+                  payload = {"resourceSpans": [{
+                      "resource": {"attributes": [
+                          {"key": "service.name",
+                           "value": {"stringValue": "otlp-canary"}}]},
+                      "scopeSpans": [{"scope": {"name": "canary"}, "spans": [{
+                          "traceId": secrets.token_hex(16),
+                          "spanId": secrets.token_hex(8),
+                          "name": "canary heartbeat", "kind": 1,
+                          "startTimeUnixNano": str(now),
+                          "endTimeUnixNano": str(now + 1000000)}]}]}]}
+                  try:
+                      req = urllib.request.Request(
+                          ep, data=json.dumps(payload).encode(), method="POST",
+                          headers={"Content-Type": "application/json"})
+                      with urllib.request.urlopen(req, timeout=10) as r:
+                          # NOTE: this 200 proves nothing. That is the entire
+                          # point of the canary -- the alert is what verifies
+                          # the span actually landed and became queryable.
+                          print(f"sent, http={r.status}", flush=True)
+                  except Exception as e:
+                      print(f"send failed: {e}", flush=True)
+                  time.sleep(period)
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "100m", memory: "64Mi" }
